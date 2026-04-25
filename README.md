@@ -45,7 +45,7 @@ streamlit run app.py
 
 ## 🌍 Live Demo
 
-👉 Coming soon (will be added after deployment)
+- [vibeguard ai is live now](https://vibeguard-ai.streamlit.app/)
 
 ---
 
