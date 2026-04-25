@@ -1,4 +1,3 @@
-
 # 🔧 VibeGuard AI
 
 AI-based system for bearing fault detection and predictive maintenance.
@@ -44,9 +43,6 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-
-
-
 ## 🌍 Live Demo
 
 👉 Coming soon (will be added after deployment)
@@ -63,4 +59,4 @@ streamlit run app.py
 
 ## 👨‍💻 Author
 
-Girish Varma
+P. Girish Varma
