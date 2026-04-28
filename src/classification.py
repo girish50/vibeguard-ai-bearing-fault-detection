@@ -1,5 +1,5 @@
 # ================================
-# FINAL: TUNED CLASSIFICATION PIPELINE
+# FINAL: COMPLETE CLASSIFICATION PIPELINE
 # ================================
 
 import os
@@ -19,8 +19,8 @@ from sklearn.model_selection import GridSearchCV
 # -------------------------------
 # CREATE FOLDERS
 # -------------------------------
-os.makedirs("../models", exist_ok=True)
-os.makedirs("../results/plots", exist_ok=True)
+os.makedirs("models", exist_ok=True)
+os.makedirs("results/plots", exist_ok=True)
 
 # -------------------------------
 # LOAD DATA
@@ -35,48 +35,49 @@ X_base = df.drop(columns=["file_name"])
 iso = IsolationForest(n_estimators=150, contamination=0.08, random_state=42)
 iso.fit(X_base)
 
-joblib.dump(iso, "../models/isolation_model.pkl")
+joblib.dump(iso, "models/isolation_model.pkl")
 print("💾 Isolation model saved!")
 
 df["anomaly_score"] = iso.decision_function(X_base)
 
 # -------------------------------
-# LABEL CREATION (IMPROVED)
+# LABEL CREATION (IMPORTANT)
 # -------------------------------
-n = len(df)
+# -------------------------------
+# LABEL CREATION (DATA-DRIVEN)
+# -------------------------------
+# Lower anomaly_score = more anomalous (fault-like)
+threshold = np.percentile(df["anomaly_score"], 30)
+df["label"] = (df["anomaly_score"] < threshold).astype(int)
 
-labels = np.zeros(n)
-
-# 🔥 improved labeling (fault near end)
-labels[int(0.4 * n):] = 1
-
-df["label"] = labels
-
+# Check distribution
+print("\nLabel distribution (overall):")
+print(df["label"].value_counts())
 # -------------------------------
 # PREPARE DATA
 # -------------------------------
-X = df.drop(columns=["file_name", "label"])
+X = df.drop(columns=["file_name", "label", "anomaly_score"])
 y = df["label"]
 
 # -------------------------------
-# TIME-BASED SPLIT
+# TIME-AWARE SPLIT (CORRECT)
 # -------------------------------
-train_end = int(0.7 * n)
-val_end = int(0.85 * n)
+split = int(0.8 * len(df))
 
-X_train = X.iloc[:train_end]
-y_train = y.iloc[:train_end]
+X_train = X.iloc[:split]
+y_train = y.iloc[:split]
 
-X_val = X.iloc[train_end:val_end]
-y_val = y.iloc[train_end:val_end]
+X_test = X.iloc[split:]
+y_test = y.iloc[split:]
 
-X_test = X.iloc[val_end:]
-y_test = y.iloc[val_end:]
+print("\nTrain shape:", X_train.shape)
+print("Test shape:", X_test.shape)
 
-print("Train:", X_train.shape)
-print("Val:", X_val.shape)
-print("Test:", X_test.shape)
+print("\nTrain distribution:")
+print(y_train.value_counts())
 
+print("\nTest distribution:")
+print(y_test.value_counts())
 # -------------------------------
 # SCALING
 # -------------------------------
@@ -85,113 +86,145 @@ scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
-joblib.dump(scaler, "../models/scaler.pkl")
+joblib.dump(scaler, "models/scaler.pkl")
 print("💾 Scaler saved!")
 
 # ================================
-# 🔥 MODEL TUNING
+# MODEL TRAINING (TIME-SERIES AWARE)
 # ================================
+
+from sklearn.model_selection import TimeSeriesSplit
+
+tscv = TimeSeriesSplit(n_splits=3)
 
 models = {}
 
 # -------------------------------
-# Logistic Regression (Tuned)
+# Logistic Regression
 # -------------------------------
-log_grid = {
-    "C": [0.1, 1, 10],
-    "solver": ["lbfgs"]
-}
-
 log_model = GridSearchCV(
     LogisticRegression(max_iter=1000, class_weight="balanced"),
-    log_grid,
-    cv=3
+    {"C": [0.1, 1, 10]},
+    cv=tscv
 )
 log_model.fit(X_train, y_train)
 models["Logistic"] = log_model.best_estimator_
 
 # -------------------------------
-# SVM (Tuned)
+# SVM
 # -------------------------------
-svm_grid = {
-    "C": [0.5, 1, 2],
-    "kernel": ["rbf"]
-}
-
 svm_model = GridSearchCV(
     SVC(probability=True, class_weight="balanced"),
-    svm_grid,
-    cv=3
+    {"C": [0.5, 1, 2], "kernel": ["rbf"]},
+    cv=tscv
 )
 svm_model.fit(X_train, y_train)
 models["SVM"] = svm_model.best_estimator_
 
 # -------------------------------
-# Random Forest (Tuned)
+# Random Forest
 # -------------------------------
-rf_grid = {
-    "n_estimators": [100, 200],
-    "max_depth": [5, 10, None]
-}
-
 rf_model = GridSearchCV(
     RandomForestClassifier(class_weight="balanced", random_state=42),
-    rf_grid,
-    cv=3
+    {"n_estimators": [100, 200], "max_depth": [5, 10, None]},
+    cv=tscv
 )
 rf_model.fit(X_train, y_train)
 models["RandomForest"] = rf_model.best_estimator_
-
 # ================================
-# EVALUATION
+# EVALUATION (FINAL CORRECT)
 # ================================
 
 results = []
 
 for name, model in models.items():
 
+    print("\n==============================")
+    print(f"Model: {name}")
+
+    # Predict
     y_pred = model.predict(X_test)
+
+    # Accuracy
     acc = accuracy_score(y_test, y_pred)
+    print(f"Accuracy: {acc*100:.2f}%")
 
-    results.append([name, acc])
-
-    print(f"\n{name} Accuracy:", acc)
+    # Classification Report
+    report = classification_report(y_test, y_pred, output_dict=True)
+    print("\nClassification Report:")
     print(classification_report(y_test, y_pred))
 
     # Confusion Matrix
     cm = confusion_matrix(y_test, y_pred)
+    print("\nConfusion Matrix:")
+    print(cm)
 
+    # -------------------------------
+    # SAFE CLASS EXTRACTION (IMPORTANT)
+    # -------------------------------
+    # get only class labels (exclude avg + accuracy)
+    class_labels = [k for k in report.keys() if k not in ("accuracy", "macro avg", "weighted avg")]
+
+    # pick FAULT class (usually '1')
+    target_class = '1' if '1' in class_labels else class_labels[-1]
+
+    # Save results
+    results.append({
+        "Model": name,
+        "Accuracy": acc,
+        "Precision": report[target_class]["precision"],
+        "Recall": report[target_class]["recall"],
+        "F1-Score": report[target_class]["f1-score"]
+    })
+
+    # -------------------------------
+    # SAVE CONFUSION MATRIX PLOT
+    # -------------------------------
     plt.figure()
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
     plt.title(f"{name} Confusion Matrix")
     plt.xlabel("Predicted")
     plt.ylabel("Actual")
 
-    path = f"../results/plots/{name}_cm.png"
-    plt.savefig(path)
+    plt.savefig(f"results/plots/{name}_cm.png")
     plt.close()
 
     # Save model
-    joblib.dump(model, f"../models/{name}.pkl")
+    joblib.dump(model, f"models/{name}.pkl")
 
-# -------------------------------
+# ================================
 # MODEL COMPARISON
-# -------------------------------
-results_df = pd.DataFrame(results, columns=["Model", "Accuracy"])
+# ================================
+results_df = pd.DataFrame(results)
 
 print("\n📊 Model Comparison:")
 print(results_df)
 
+# Save CSV
+results_df.to_csv("results/model_comparison.csv", index=False)
+
 # -------------------------------
+# COMPARISON GRAPH
+# -------------------------------
+plt.figure()
+plt.bar(results_df["Model"], results_df["Accuracy"])
+plt.title("Model Accuracy Comparison")
+plt.ylabel("Accuracy")
+plt.xticks(rotation=30)
+
+plt.savefig("results/plots/model_comparison.png")
+plt.close()
+
+# ================================
 # BEST MODEL
-# -------------------------------
+# ================================
 best_model_name = results_df.sort_values(by="Accuracy", ascending=False).iloc[0]["Model"]
 
 best_model = models[best_model_name]
 
-joblib.dump(best_model, "../models/best_model.pkl")
+joblib.dump(best_model, "models/best_model.pkl")
 
 print(f"\n🏆 Best Model: {best_model_name}")
 print("💾 Best model saved!")
 
-print("\n🎉 TRAINING COMPLETED SUCCESSFULLY!")
+print("\n🎉 EVALUATION COMPLETED SUCCESSFULLY!")
